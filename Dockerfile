@@ -3,8 +3,12 @@ WORKDIR /app
 
 # ffmpeg + python are required for yt-dlp based YouTube audio extraction.
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends ffmpeg python3 python3-pip curl \
-  && pip3 install --break-system-packages yt-dlp \
+  && apt-get install -y --no-install-recommends ffmpeg python3 python3-pip curl unzip ca-certificates \
+  && pip3 install --break-system-packages --no-cache-dir yt-dlp \
+  && curl -fsSL https://deno.land/install.sh | DENO_INSTALL=/usr/local sh \
+  && deno --version \
+  && yt-dlp --version \
+  && ffmpeg -version \
   && rm -rf /var/lib/apt/lists/*
 
 COPY package*.json ./
