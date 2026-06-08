@@ -4,17 +4,16 @@
   "description": "Real-time sports event engine with TypeScript, PostgreSQL, pgvector, Redis, BullMQ, Socket.IO and OpenAI.",
   "main": "dist/server.js",
   "scripts": {
+    "dev": "concurrently \"npm:dev:api\" \"npm:dev:event-worker\" \"npm:dev:video-worker\"",
     "dev:api": "tsx watch src/server.ts",
-    "dev:worker:event": "tsx watch src/workers/event.worker.ts",
-    "dev:worker:video": "tsx watch src/workers/video.worker.ts",
-    "dev": "concurrently -n api,event-worker,video-worker -c blue,green,magenta \"npm:dev:api\" \"npm:dev:worker:event\" \"npm:dev:worker:video\"",
-    "migrate": "tsx src/db/migrate.ts",
+    "dev:event-worker": "tsx watch src/workers/event.worker.ts",
+    "dev:video-worker": "tsx watch src/workers/video.worker.ts",
     "build": "tsc",
     "start": "node dist/server.js",
-    "worker:event": "node dist/workers/event.worker.js",
-    "worker:video": "node dist/workers/video.worker.js",
-    "lint": "eslint src --ext .ts",
-    "test": "jest --passWithNoTests"
+    "start:api": "node dist/server.js",
+    "start:event-worker": "node dist/workers/event.worker.js",
+    "start:video-worker": "node dist/workers/video.worker.js",
+    "migrate": "tsx src/db/migrate.ts"
   },
   "dependencies": {
     "@socket.io/redis-adapter": "latest",
