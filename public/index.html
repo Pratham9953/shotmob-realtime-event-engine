@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ShotMob Event Engine Demo</title>
+    <style>
+      body {
+        font-family: system-ui, sans-serif;
+        max-width: 900px;
+        margin: 40px auto;
+        padding: 0 16px;
+      }
+
+      input,
+      button,
+      textarea {
+        padding: 10px;
+        margin: 6px 0;
+        width: 100%;
+        box-sizing: border-box;
+      }
+
+      button {
+        cursor: pointer;
+      }
+
+      .row {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 16px;
+      }
+
+      pre {
+        background: #111;
+        color: #0f0;
+        padding: 12px;
+        min-height: 250px;
+        overflow: auto;
+      }
+    </style>
+  </head>
+
+  <body>
+    <h1>Real-time Sports Event Engine</h1>
+    <p>Use this page in your Loom demo to show multi-user room broadcasting.</p>
+
+    <div class="row">
+      <section>
+        <h2>Auth</h2>
+        <input id="email" value="demo@example.com" placeholder="Email" />
+        <input id="password" value="password123" placeholder="Password" type="password" />
+        <button id="registerBtn">Register</button>
+        <button id="loginBtn">Login</button>
+      </section>
+
+      <section>
+        <h2>Socket Room</h2>
+        <input id="matchId" value="123" placeholder="Match ID" />
+        <button id="connectSocketBtn">Connect + Join Match</button>
+      </section>
+    </div>
+
+    <section>
+      <h2>Create Event</h2>
+      <textarea id="eventJson" rows="8">{
+  "matchId": "123",
+  "type": "goal",
+  "team": "home",
+  "player": "John Doe",
+  "minute": 42,
+  "payload": { "description": "A powerful finish into the bottom corner" }
+}</textarea>
+
+      <button id="sendEventBtn">Send Event</button>
+      <button id="generateSummaryBtn">Generate AI Summary</button>
+    </section>
+
+    <section>
+      <h2>YouTube Ingestion</h2>
+      <input id="youtubeUrl" placeholder="Paste YouTube URL" />
+      <button id="ingestYoutubeBtn">Ingest YouTube Video</button>
+    </section>
+
+    <h2>Live Log</h2>
+    <pre id="log"></pre>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="/demo.js"></script>
+  </body>
+</html>
