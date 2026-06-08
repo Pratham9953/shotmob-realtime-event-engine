@@ -37,7 +37,10 @@ export async function requestYoutubeIngestion(params: {
   await publishSocketEvent({
     matchId: params.matchId,
     eventName: "video-status",
-    payload: { ingestionId: ingestion.id, status: "queued" }
+    payload: {
+      ingestionId: ingestion.id,
+      status: "queued"
+    }
   });
 
   return ingestion;
@@ -49,15 +52,26 @@ export async function processYoutubeIngestionJob(params: {
   youtubeUrl: string;
   userId: string | null;
 }): Promise<void> {
-  await updateVideoStatus(params.ingestionId, params.matchId, "downloading");
-
-  const audioFilePath = await downloadYoutubeAudio(params.youtubeUrl, params.ingestionId);
+  let audioFilePath: string | null = null;
 
   try {
+    await updateVideoStatus(params.ingestionId, params.matchId, "downloading");
+
+    audioFilePath = await downloadYoutubeAudio(
+      params.youtubeUrl,
+      params.ingestionId
+    );
+
     await updateVideoStatus(params.ingestionId, params.matchId, "transcribing");
+
     const transcript = await transcribeAudio(audioFilePath);
 
-    await updateVideoStatus(params.ingestionId, params.matchId, "extracting_highlights");
+    await updateVideoStatus(
+      params.ingestionId,
+      params.matchId,
+      "extracting_highlights"
+    );
+
     const highlights = await extractHighlightsFromTranscript(transcript);
 
     await updateVideoIngestion({
@@ -68,6 +82,16 @@ export async function processYoutubeIngestionJob(params: {
       error: null
     });
 
+    await publishSocketEvent({
+      matchId: params.matchId,
+      eventName: "video-status",
+      payload: {
+        ingestionId: params.ingestionId,
+        status: "events_queued",
+        highlightsCount: highlights.length
+      }
+    });
+
     for (const highlight of highlights) {
       const eventInput = createEventSchema.parse({
         matchId: params.matchId,
@@ -75,59 +99,212 @@ export async function processYoutubeIngestionJob(params: {
         team: highlight.team ?? "neutral",
         player: highlight.player,
         minute: highlight.minute,
-        payload: { description: highlight.description, source: "youtube_transcript" }
+        payload: {
+          description: highlight.description,
+          source: "youtube_transcript"
+        }
       });
 
       const embedding = await createTextEmbedding(highlight.description);
-      const event = await insertEvent({ input: eventInput, userId: params.userId, source: "youtube", embedding });
-      await enqueueEventProcessingJob({ eventId: event.id, matchId: event.match_id });
+
+      const event = await insertEvent({
+        input: eventInput,
+        userId: params.userId,
+        source: "youtube",
+        embedding
+      });
+
+      await enqueueEventProcessingJob({
+        eventId: event.id,
+        matchId: event.match_id
+      });
     }
 
     await updateVideoStatus(params.ingestionId, params.matchId, "completed");
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message : "Unknown video ingestion error";
+
+    await updateVideoStatus(
+      params.ingestionId,
+      params.matchId,
+      "failed",
+      message
+    );
+
+    throw error;
   } finally {
-    await fs.rm(audioFilePath, { force: true }).catch((error) => {
-      logger.warn({ error, audioFilePath }, "Failed to remove temporary audio file");
-    });
+    if (audioFilePath) {
+      await fs.rm(audioFilePath, { force: true }).catch((error) => {
+        logger.warn(
+          {
+            err: error,
+            audioFilePath
+          },
+          "Failed to remove temporary audio file"
+        );
+      });
+    }
   }
 }
 
-async function updateVideoStatus(ingestionId: string, matchId: string, status: string, error?: string): Promise<void> {
-  await updateVideoIngestion({ ingestionId, status, error: error ?? null });
-  await publishSocketEvent({ matchId, eventName: "video-status", payload: { ingestionId, status, error } });
+async function updateVideoStatus(
+  ingestionId: string,
+  matchId: string,
+  status: string,
+  error?: string
+): Promise<void> {
+  await updateVideoIngestion({
+    ingestionId,
+    status,
+    error: error ?? null
+  });
+
+  await publishSocketEvent({
+    matchId,
+    eventName: "video-status",
+    payload: {
+      ingestionId,
+      status,
+      error
+    }
+  });
 }
 
-async function downloadYoutubeAudio(youtubeUrl: string, ingestionId: string): Promise<string> {
+async function downloadYoutubeAudio(
+  youtubeUrl: string,
+  ingestionId: string
+): Promise<string> {
   await fs.mkdir(env.TMP_DIR, { recursive: true });
+
   const outputTemplate = path.join(env.TMP_DIR, `${ingestionId}.%(ext)s`);
   const expectedPath = path.join(env.TMP_DIR, `${ingestionId}.mp3`);
+  const cookiesPath = await prepareYoutubeCookiesFile();
 
-  await runCommand(env.YTDLP_BINARY, [
+  const args: string[] = [
+    "--no-playlist",
+    "--force-ipv4",
+
+    /**
+     * Railway/cloud servers often need a JS runtime for newer YouTube extraction.
+     * Dockerfile should install Deno.
+     */
+    "--js-runtimes",
+    "deno",
+
+    /**
+     * Use stable YouTube player clients.
+     */
+    "--extractor-args",
+    "youtube:player_client=default,web",
+
     "-x",
     "--audio-format",
     "mp3",
     "--audio-quality",
     "5",
     "-o",
-    outputTemplate,
-    youtubeUrl
-  ]);
+    outputTemplate
+  ];
 
-  return expectedPath;
+  if (cookiesPath) {
+    args.push("--cookies", cookiesPath);
+  }
+
+  args.push(youtubeUrl);
+
+  logger.info(
+    {
+      ingestionId,
+      hasCookies: Boolean(cookiesPath),
+      ytdlpBinary: env.YTDLP_BINARY
+    },
+    "Starting YouTube audio download"
+  );
+
+  await runCommand(env.YTDLP_BINARY, args);
+
+  return resolveDownloadedAudioPath(expectedPath, ingestionId);
+}
+
+async function prepareYoutubeCookiesFile(): Promise<string | null> {
+  const cookiesBase64 = process.env.YOUTUBE_COOKIES_BASE64;
+
+  if (!cookiesBase64) {
+    return null;
+  }
+
+  await fs.mkdir(env.TMP_DIR, { recursive: true });
+
+  const cookiesPath = path.join(env.TMP_DIR, "youtube-cookies.txt");
+  const cookiesContent = Buffer.from(cookiesBase64, "base64").toString("utf8");
+
+  if (!cookiesContent.includes("youtube.com")) {
+    logger.warn(
+      "YOUTUBE_COOKIES_BASE64 is set, but cookies content does not look like YouTube cookies"
+    );
+  }
+
+  await fs.writeFile(cookiesPath, cookiesContent, {
+    encoding: "utf8",
+    mode: 0o600
+  });
+
+  return cookiesPath;
+}
+
+async function resolveDownloadedAudioPath(
+  expectedPath: string,
+  ingestionId: string
+): Promise<string> {
+  try {
+    await fs.access(expectedPath);
+    return expectedPath;
+  } catch {
+    const files = await fs.readdir(env.TMP_DIR);
+
+    const matchedFile = files.find(
+      (file) => file.startsWith(`${ingestionId}.`) && file.endsWith(".mp3")
+    );
+
+    if (!matchedFile) {
+      throw new Error(`Downloaded audio file not found for ingestion ${ingestionId}`);
+    }
+
+    return path.join(env.TMP_DIR, matchedFile);
+  }
 }
 
 async function runCommand(command: string, args: string[]): Promise<void> {
   await new Promise<void>((resolve, reject) => {
-    const childProcess = spawn(command, args, { stdio: ["ignore", "pipe", "pipe"] });
+    const childProcess = spawn(command, args, {
+      stdio: ["ignore", "pipe", "pipe"]
+    });
+
     let stderr = "";
+    let stdout = "";
+
+    childProcess.stdout.on("data", (chunk) => {
+      stdout += chunk.toString();
+    });
 
     childProcess.stderr.on("data", (chunk) => {
       stderr += chunk.toString();
     });
 
     childProcess.on("error", reject);
+
     childProcess.on("close", (code) => {
-      if (code === 0) resolve();
-      else reject(new Error(`${command} exited with code ${code}. ${stderr}`));
+      if (code === 0) {
+        resolve();
+        return;
+      }
+
+      reject(
+        new Error(
+          `${command} exited with code ${code}. ${stderr || stdout}`.trim()
+        )
+      );
     });
   });
 }
@@ -145,8 +322,11 @@ async function transcribeAudio(audioFilePath: string): Promise<string> {
   return String(transcription).trim();
 }
 
-async function extractHighlightsFromTranscript(transcript: string): Promise<ExtractedHighlight[]> {
+async function extractHighlightsFromTranscript(
+  transcript: string
+): Promise<ExtractedHighlight[]> {
   const openai = getOpenAIClient();
+
   const response = await openai.responses.create({
     model: env.OPENAI_SUMMARY_MODEL,
     input: [
@@ -165,7 +345,13 @@ async function extractHighlightsFromTranscript(transcript: string): Promise<Extr
   });
 
   const rawText = response.output_text?.trim() ?? "[]";
-  const jsonText = rawText.replace(/^```json/i, "").replace(/^```/, "").replace(/```$/, "").trim();
+
+  const jsonText = rawText
+    .replace(/^```json/i, "")
+    .replace(/^```/, "")
+    .replace(/```$/, "")
+    .trim();
+
   const parsed = JSON.parse(jsonText) as ExtractedHighlight[];
 
   return parsed.slice(0, 25).map((highlight) => ({
