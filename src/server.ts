@@ -10,8 +10,10 @@ async function bootstrap(): Promise<void> {
 
   await initializeSocketServer(httpServer);
 
-  httpServer.listen(env.PORT, () => {
-    logger.info({ port: env.PORT }, "API + Socket.IO server started");
+  const port = Number(process.env.PORT ?? env.PORT ?? 4000);
+
+  httpServer.listen(port, "0.0.0.0", () => {
+    logger.info({ port }, "API + Socket.IO server started");
   });
 
   const shutdown = async (signal: string): Promise<void> => {
